@@ -1,0 +1,332 @@
+Implementing the Spring Security
+
+1. need to create entity class for User
+
+package com.expense_api.entity;
+
+
+import jakarta.persistence.*;
+import lombok.Data;
+
+@Data
+@Entity
+@Table(name = "users")
+public class User {
+
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
+
+    @Column(nullable = false, unique = true)
+    private String username;
+
+    @Column(nullable = false)
+    private String password;
+
+    @Column(nullable = false)
+    private String role; // e.g., "ROLE_USER" or "ROLE_ADMIN"
+}
+____________________________________________________________________________________________________________________
+
+2. Create UserRepositoy  and define findByUserName() custom finder method
+
+package com.expense_api.repository;
+
+import com.expense_api.entity.User;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+import java.util.Optional;
+
+public interface UserRepository extends JpaRepository<User, Long> {
+    Optional<User> findByUsername(String username);
+}
+
+____________________________________________________________________________________________________________________
+
+
+3. We will create CustomUserDetails class that will implements UserDetails and will autowired the User Entity class
+
+
+package com.expense_api.security;
+
+import com.expense_api.entity.User;
+import org.springframework.security.core.GrantedAuthority;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
+import org.springframework.security.core.userdetails.UserDetails;
+
+import java.util.Collection;
+import java.util.List;
+
+public class CustomUserDetails implements UserDetails {
+    private final User user;
+
+    public CustomUserDetails(User user) {
+        this.user = user;
+    }
+    @Override
+    public Collection<? extends GrantedAuthority> getAuthorities() {
+        return List.of(new SimpleGrantedAuthority(user.getRole()));
+    }
+
+    @Override
+    public String getPassword() {
+        return user.getPassword();
+    }
+
+    @Override
+    public String getUsername() {
+        return user.getUsername();
+    }
+
+    @Override
+    public boolean isAccountNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isAccountNonLocked() {
+        return true;
+    }
+
+    @Override
+    public boolean isCredentialsNonExpired() {
+        return true;
+    }
+
+    @Override
+    public boolean isEnabled() {
+        return true;
+    }
+}
+
+____________________________________________________________________________________________________________________
+4. create CustomUserDetailsService class that will implements UserDetailsService
+
+package com.expense_api.security;
+
+import com.expense_api.entity.User;
+import com.expense_api.repository.UserRepository;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.security.core.userdetails.UserDetails;
+import org.springframework.security.core.userdetails.UserDetailsService;
+import org.springframework.security.core.userdetails.UsernameNotFoundException;
+import org.springframework.stereotype.Service;
+
+import java.util.Optional;
+@Service
+public class CustomUserDetailsService implements UserDetailsService {
+    @Autowired
+    private UserRepository userRepository;
+    @Override
+    public UserDetails loadUserByUsername(String username) throws UsernameNotFoundException {
+        User user = userRepository.findByUsername(username).orElseThrow(()->new UsernameNotFoundException("User not found with this username :"+ username));
+        return new CustomUserDetails(user);
+
+    }
+}
+____________________________________________________________________________________________________________________
+
+5. create config package and create SecurityConfig class
+
+
+
+    package com.expense_api.config;
+
+import com.expense_api.security.CustomUserDetailsService;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.security.authentication.AuthenticationManager;
+import org.springframework.security.config.Customizer;
+import org.springframework.security.config.annotation.authentication.configuration.AuthenticationConfiguration;
+import org.springframework.security.config.annotation.web.builders.HttpSecurity;
+import org.springframework.security.config.annotation.web.configurers.AbstractHttpConfigurer;
+import org.springframework.security.crypto.bcrypt.BCryptPasswordEncoder;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.security.web.SecurityFilterChain;
+
+@Configuration
+public class SecurityConfig {
+
+    private final CustomUserDetailsService userDetailsService;
+
+    public SecurityConfig(CustomUserDetailsService userDetailsService) {
+        this.userDetailsService = userDetailsService;
+    }
+
+    @Bean
+    public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
+        http
+                .csrf(AbstractHttpConfigurer::disable) // Disable CSRF for REST APIs
+                .authorizeHttpRequests(auth -> auth
+                        .requestMatchers("/api/v1/saveExpense").permitAll() // Public: Create expense
+                        .requestMatchers("/api/v1/register").permitAll() // Public: Create user
+                        .requestMatchers("/api/v1/updateExpense/**", "/api/v1/deleteExpense/**").hasRole("ADMIN") // Only Admin can update/delete
+                        .requestMatchers("/api/v1/getAllExpense", "/api/v1/getExpense/**").hasAnyRole("USER", "ADMIN") // Both Admin and User can view
+                        .anyRequest().authenticated() // Other requests require authentication
+                )
+                .httpBasic(Customizer.withDefaults()); // Basic Authentication
+
+        return http.build();
+    }
+
+    @Bean
+    public AuthenticationManager authenticationManager(AuthenticationConfiguration authenticationConfiguration) throws Exception {
+        return authenticationConfiguration.getAuthenticationManager();
+    }
+
+    @Bean
+    public PasswordEncoder passwordEncoder() {
+        return new BCryptPasswordEncoder();
+    }
+}
+
+____________________________________________________________________________________________________________________
+6. create UserRegistrationResponse and UserRegistrationRequest class
+package com.expense_api.payload;
+
+import jakarta.validation.constraints.NotBlank;
+import jakarta.validation.constraints.Size;
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class UserRegistrationRequest {
+    @NotBlank(message = "Name is required")
+    @Size(min = 2, max = 50, message = "Name should be between 2 and 50 characters")
+    private String username;
+
+
+    @NotBlank(message = "Password is required")
+    @Size(min = 6, message = "Password should be at least 6 characters")
+    private String password;
+
+    @NotBlank(message = "Role is required")
+    private String role;
+}
+
+
+package com.expense_api.payload;
+
+import lombok.AllArgsConstructor;
+import lombok.Data;
+import lombok.NoArgsConstructor;
+
+import java.sql.Timestamp;
+@Data
+@AllArgsConstructor
+@NoArgsConstructor
+public class UserRegistrationResponse {
+    private Long id;
+    private String username;
+    private String password;
+    private String role;
+    private Timestamp createdAt;
+    private Timestamp updatedAt;
+}
+
+
+____________________________________________________________________________________________________________________
+7. create UserServiceIml class where we store user details in database
+
+package com.expense_api.service.impl;
+
+import com.expense_api.entity.User;
+import com.expense_api.payload.UserRegistrationRequest;
+import com.expense_api.payload.UserRegistrationResponse;
+import com.expense_api.repository.UserRepository;
+import com.expense_api.service.UserService;
+import org.modelmapper.ModelMapper;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.stereotype.Service;
+
+@Service
+public class UserServiceImpl implements UserService {
+
+    private static final Logger logger = LoggerFactory.getLogger(UserServiceImpl.class);
+
+    private final UserRepository userRepository;
+    private final PasswordEncoder passwordEncoder;
+    private final ModelMapper modelMapper;
+
+    public UserServiceImpl(UserRepository userRepository, PasswordEncoder passwordEncoder, ModelMapper modelMapper) {
+        this.userRepository = userRepository;
+        this.passwordEncoder = passwordEncoder;
+        this.modelMapper = modelMapper;
+    }
+
+    @Override
+    public UserRegistrationResponse registerUser(UserRegistrationRequest userRegistrationRequest) {
+        // Log the incoming registration request
+        logger.info("Received registration request for user: {}", userRegistrationRequest.getUsername());
+
+        try {
+            // Map the UserRegistrationRequest to User entity
+            User user = modelMapper.map(userRegistrationRequest, User.class);
+
+            // Encode the password before saving
+            user.setPassword(passwordEncoder.encode(user.getPassword()));
+
+            // Save the user to the repository
+            User savedUser = userRepository.save(user);
+
+            // Log the successful registration
+            logger.info("User {} registered successfully.", savedUser.getUsername());
+
+            // Return the response DTO
+            return modelMapper.map(savedUser, UserRegistrationResponse.class);
+        } catch (Exception e) {
+            // Log any exception that occurs
+            logger.error("Error occurred while registering user: {}", userRegistrationRequest.getUsername(), e);
+            throw new RuntimeException("User registration failed");
+        }
+    }
+}
+
+
+____________________________________________________________________________________________________________________
+8. create UserController class
+
+package com.expense_api.controller;
+
+import com.expense_api.payload.UserRegistrationRequest;
+import com.expense_api.payload.UserRegistrationResponse;
+import com.expense_api.service.UserService;
+import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+@RestController
+@RequestMapping("/api/v1")
+public class UserController {
+
+    private static final Logger logger = LoggerFactory.getLogger(UserController.class);
+
+    private final UserService userService;
+
+    public UserController(UserService userService) {
+        this.userService = userService;
+    }
+
+    @PostMapping("/register")
+    public ResponseEntity<UserRegistrationResponse> registerUser(@Valid @RequestBody UserRegistrationRequest userRegistrationRequest) {
+        // Log the incoming registration request
+        logger.info("Received registration request for user: {}", userRegistrationRequest.getUsername());
+
+        // Register user via service
+        UserRegistrationResponse userRegistrationResponse = userService.registerUser(userRegistrationRequest);
+
+        // Log success
+        logger.info("User {} registered successfully.", userRegistrationRequest.getUsername());
+
+        // Return successful response
+        return new ResponseEntity<>(userRegistrationResponse, HttpStatus.CREATED);
+    }
+}
